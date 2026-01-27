@@ -1,0 +1,48 @@
+# =========================
+# Visual Studio / VS Code
+# =========================
+.vs/
+.vscode/
+.idea/
+*.sln
+*.slnx
+
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual Environment
+venv/
+.env
+
+# =========================
+# PyInstaller
+# =========================
+build/
+dist/
+*.spec
+
+# =========================
+# Logs
+# =========================
+*.log
+gateway_error.log
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Temporary / Cache
+# =========================
+*.tmp
+*.bak
+sketch_jan22b.ino
