@@ -28,7 +28,9 @@ except ImportError:
 # Configuration
 # =========================
 BAUD_RATE = 9600
-API_URL = "https://rims.r-dev.asia/api/pick-command"
+API_BASE_URL = "http://localhost:8000"
+API_QUEUE_URL = f"{API_BASE_URL}/parts/queue/next"
+GATEWAY_API_KEY = "your-secret-gateway-key-here"  # TODO: Change this to your actual API key
 API_POLL_INTERVAL = 0.5   # Polling API lebih cepat (0.5s)
 PORT_SCAN_INTERVAL = 3.0  # Scan hardware lebih santai (3.0s) agar hemat CPU
 RETRY_INTERVAL = 1.0
@@ -101,7 +103,7 @@ def find_all_esp_ports():
     return found_ports
 
 # =========================
-# Gateway Core (OPTIMIZED)
+# Gateway Core (OPTIMIZED with API Key Auth)
 # =========================
 def gateway_loop(update_status, log_ui, update_stats):
     active_connections = {}
@@ -116,11 +118,12 @@ def gateway_loop(update_status, log_ui, update_stats):
             update_status(key, val, col)
             last_ui_state[key] = state_key
 
-    log_ui("🚀 Gateway Service Started (Optimized)")
+    log_ui("🚀 Gateway Service Started (Optimized with API Key Auth)")
     setup_logging()
 
-    # OPTIMISASI 1: Persistent Session
+    # OPTIMISASI 1: Persistent Session with API Key
     session = requests.Session()
+    session.headers.update({"X-API-Key": GATEWAY_API_KEY})
     adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10)
     session.mount('https://', adapter)
     session.mount('http://', adapter)
@@ -178,25 +181,42 @@ def gateway_loop(update_status, log_ui, update_stats):
                 smart_update_status("serial", "NO DEVICES", ERROR_COLOR)
 
             # ---------------------------
-            # 3. API Polling (Fast)
+            # 3. API Polling with API Key Auth
             # ---------------------------
             cmd = None
             try:
-                # Gunakan session.get bukan requests.get
-                r = session.get(API_URL, verify=False, timeout=3)
+                # API call with X-API-Key header (already in session headers)
+                r = session.get(API_QUEUE_URL, verify=False, timeout=3)
                 
                 if r.status_code == 200:
                     smart_update_status("api", "OK", SUCCESS_COLOR)
-                    cmd_text = r.text.strip()
-                    if cmd_text:
-                        cmd = cmd_text
+                    try:
+                        data = r.json()
+                        cmd = data.get("part_number")
+                        if cmd:
+                            log_ui(f"📥 Received command: {cmd}")
+                    except:
+                        # If response is not JSON, treat as text
+                        cmd_text = r.text.strip()
+                        if cmd_text:
+                            cmd = cmd_text
+                elif r.status_code == 204:
+                    # No content - queue is empty (this is normal)
+                    smart_update_status("api", "IDLE", SUCCESS_COLOR)
+                elif r.status_code == 401:
+                    smart_update_status("api", "AUTH FAILED", ERROR_COLOR)
+                    log_ui("❌ Invalid API Key - check GATEWAY_API_KEY")
+                    stats["errors"] += 1
+                    time.sleep(5)  # Wait before retrying
                 else:
                     smart_update_status("api", f"ERR {r.status_code}", ERROR_COLOR)
                     stats["errors"] += 1
+            except requests.exceptions.Timeout:
+                smart_update_status("api", "TIMEOUT", WARNING_COLOR)
+                stats["errors"] += 1
             except requests.exceptions.RequestException as e:
-                smart_update_status("api", "TIMEOUT", ERROR_COLOR)
-                # Jangan log error setiap detik jika internet mati, cukup status UI
-                # log_error("API_FAIL", str(e)) 
+                smart_update_status("api", "CONNECTION ERR", ERROR_COLOR)
+                log_error("API_FAIL", str(e))
                 stats["errors"] += 1
 
             # ---------------------------
@@ -204,11 +224,15 @@ def gateway_loop(update_status, log_ui, update_stats):
             # ---------------------------
             if cmd and active_connections:
                 dead_ports = []
+                success_count = 0
+                
                 for port, ser in active_connections.items():
                     try:
                         ser.write((cmd + "\n").encode())
+                        success_count += 1
                     except Exception as e:
                         dead_ports.append(port)
+                        log_error(f"SERIAL_WRITE_{port}", str(e))
                 
                 # Cleanup dead ports immediately
                 for p in dead_ports:
@@ -217,9 +241,9 @@ def gateway_loop(update_status, log_ui, update_stats):
                     del active_connections[p]
                     log_ui(f"❌ Write Error: {p} dropped")
 
-                if not dead_ports:
+                if success_count > 0:
                     stats["commands_sent"] += 1
-                    log_ui(f"📤 Sent: {cmd}")
+                    log_ui(f"📤 Sent to {success_count} device(s): {cmd}")
             
             # Sleep sesuai interval API (lebih cepat)
             time.sleep(API_POLL_INTERVAL)
@@ -242,7 +266,7 @@ def gateway_loop(update_status, log_ui, update_stats):
 class GatewayUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("RIMS Gateway Optimized v2.1") # Versi Baru
+        self.title("RIMS Gateway v0.1.1 (ProMax Edition)")
         self.geometry("600x650")
         self.resizable(False, False)
         self.configure(bg=BG_COLOR)
@@ -279,7 +303,7 @@ class GatewayUI(tk.Tk):
         header = ttk.Frame(self, style="Header.TFrame", height=80)
         header.pack(fill="x")
         header.pack_propagate(False)
-        ttk.Label(header, text="RIMS Gateway (Turbo Mode)", style="Title.TLabel").pack(pady=25)
+        ttk.Label(header, text="RIMS Gateway (ASI Plant 2)", style="Title.TLabel").pack(pady=25)
 
         content = ttk.Frame(self, style="Content.TFrame", padding=20)
         content.pack(fill="both", expand=True)
